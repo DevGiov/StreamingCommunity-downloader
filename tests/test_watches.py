@@ -91,6 +91,35 @@ def test_a_second_follower_joins_the_same_watch(client, panel):
     assert sorted(second["followers"]) == ["ann", "bob"]
 
 
+def test_the_owner_can_change_the_languages(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    csrf = _login(client, bob)
+    watch_id = _follow(client, csrf).json()["id"]
+
+    response = client.put(f"/api/watches/{watch_id}/languages",
+                          json={"audio_languages": ["ita", "eng"], "subtitle_languages": ["ita"]},
+                          headers={"X-CSRF-Token": csrf})
+
+    assert response.status_code == 200, response.text
+    assert watch_models.get(watch_id).audio_languages == ["eng", "ita"]
+
+
+def test_a_second_follower_cannot_change_the_languages(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    watch_id = _follow(client, _login(client, bob)).json()["id"]
+    ann = _user("ann", Permission.REQUEST)
+    csrf = _login(client, ann)
+    _follow(client, csrf)
+
+    response = client.put(f"/api/watches/{watch_id}/languages",
+                          json={"audio_languages": ["eng"], "subtitle_languages": []},
+                          headers={"X-CSRF-Token": csrf})
+
+    # One watch serves both: ann changing it would change it for bob.
+    assert response.status_code == 403
+    assert watch_models.get(watch_id).audio_languages == ["ita"]
+
+
 def test_unfollowing_the_last_follower_stops_the_watch(client, panel):
     bob = _user("bob", Permission.REQUEST)
     csrf = _login(client, bob)
@@ -520,3 +549,68 @@ def test_the_last_follower_leaving_stops_the_series(client, panel):
 
     assert response.json()["stopped"] is True
     assert watch_models.get(watch_id).enabled is False
+
+
+# ── Followers asking for different languages ──────────────────────────────────
+
+def test_joining_with_extra_languages_tells_the_approvers(client, panel):
+    boss = _user("boss", ALL_PERMISSIONS)
+    bob = _user("bob", Permission.REQUEST)
+    _follow(client, _login(client, bob))
+    ann = _user("ann", Permission.REQUEST)
+
+    body = _follow(client, _login(client, ann), {
+        **TV_BODY, "audio_languages": ["ita", "eng"], "subtitle_languages": ["eng"],
+    }).json()
+
+    assert any("ann segue «Test Series» chiedendo anche audio ENG e sottotitoli ENG" in m
+               for m in _bell(boss)), _bell(boss)
+    assert body["missing_languages"] == {"audio": ["eng"], "subtitles": ["eng"], "by": ["ann"]}
+    # Nothing is changed on ann's behalf: that is the approver's call.
+    assert watch_models.get(body["id"]).audio_languages == ["ita"]
+
+
+def test_joining_with_fewer_languages_is_not_a_conflict(client, panel):
+    boss = _user("boss", ALL_PERMISSIONS)
+    bob = _user("bob", Permission.REQUEST)
+    _follow(client, _login(client, bob), {**TV_BODY, "audio_languages": ["ita", "eng"]})
+    before = len(_bell(boss))
+    ann = _user("ann", Permission.REQUEST)
+
+    body = _follow(client, _login(client, ann)).json()
+
+    assert body["missing_languages"]["by"] == []
+    assert not any("chiedendo anche" in m for m in _bell(boss)[before:])
+
+
+def test_merging_downloads_every_language_asked_for(client, panel):
+    boss = _user("boss", ALL_PERMISSIONS)
+    bob = _user("bob", Permission.REQUEST)
+    watch_id = _follow(client, _login(client, bob)).json()["id"]
+    ann = _user("ann", Permission.REQUEST)
+    _follow(client, _login(client, ann), {**TV_BODY, "subtitle_languages": ["ita"]})
+    tom = _user("tom", Permission.REQUEST)
+    _follow(client, _login(client, tom), {**TV_BODY, "audio_languages": ["eng"]})
+
+    csrf = _login(client, boss)
+    response = client.post(f"/api/watches/{watch_id}/merge-languages",
+                           headers={"X-CSRF-Token": csrf})
+
+    assert response.status_code == 200, response.text
+    watch = watch_models.get(watch_id)
+    assert watch.audio_languages == ["eng", "ita"]
+    assert watch.subtitle_languages == ["ita"]
+    assert response.json()["missing_languages"]["by"] == []
+
+
+def test_a_follower_cannot_merge(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    watch_id = _follow(client, _login(client, bob)).json()["id"]
+    ann = _user("ann", Permission.REQUEST)
+    csrf = _login(client, ann)
+    _follow(client, csrf, {**TV_BODY, "audio_languages": ["eng"]})
+
+    response = client.post(f"/api/watches/{watch_id}/merge-languages",
+                           headers={"X-CSRF-Token": csrf})
+
+    assert response.status_code == 403
