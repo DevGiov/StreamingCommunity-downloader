@@ -107,7 +107,8 @@ function renderWatchesList() {
     ].filter(Boolean).join(' e ');
     const gapHtml = gapParts && _canEditWatchLanguages(w)
       ? `<div class="req-problem mt-1">
-           <i class="ti ti-language"></i> ${escapeHtml(gap.by.join(', '))} ${gap.by.length > 1 ? 'chiedono' : 'chiede'}
+           <i class="ti ti-language"></i> ${gap.by.length ? escapeHtml(gap.by.join(', ')) : 'Altri follower'}
+           ${gap.by.length === 1 ? 'chiede' : 'chiedono'}
            anche ${escapeHtml(gapParts)}
          </div>`
       : '';
@@ -165,28 +166,47 @@ function _canEditWatchLanguages(w) {
 
 let _langWatchId = null;
 
-function openWatchLanguages(watchId) {
+// Offers the tracks the series really has, read from its latest episode on
+// open. A language the watch keeps but the source no longer carries stays on
+// the list, flagged: dropping it silently would hide why its episodes fail.
+async function openWatchLanguages(watchId) {
   const w = _watches.find(x => x.id === watchId);
   if (!w) return;
   _langWatchId = watchId;
   document.getElementById('watch-lang-title').textContent = w.title;
-  // The source's track list is not known from here, so the choice is the
-  // languages the panel knows by name plus whatever the watch already has.
-  const codes = which => [...new Set([...Object.keys(LANG_NAMES), ...w[which]])];
-  const boxes = (which, cls) => codes(which).map(c => `<label class="me-2 mb-1" style="cursor:pointer">
-      <input type="checkbox" class="${cls} me-1" value="${escapeHtml(c)}" ${w[which].includes(c) ? 'checked' : ''}>
-      <span class="badge bg-blue-lt">${escapeHtml(langName(c))}</span></label>`).join('');
-  document.getElementById('watch-lang-audio').innerHTML = boxes('audio_languages', 'watch-lang-audio-check');
-  document.getElementById('watch-lang-subs').innerHTML = boxes('subtitle_languages', 'watch-lang-subs-check');
+  const audioBox = document.getElementById('watch-lang-audio');
+  const subsBox = document.getElementById('watch-lang-subs');
+  const saveBtn = document.getElementById('watch-lang-save');
+  const loading = '<span class="text-muted"><span class="spinner-border spinner-border-sm me-1"></span>Lettura delle tracce dalla fonte...</span>';
+  audioBox.innerHTML = loading;
+  subsBox.innerHTML = '';
+  saveBtn.disabled = true;
   showModal('watch-lang-modal');
-}
 
-async function mergeWatchLanguages(watchId) {
+  let tracks;
   try {
-    await api.post(`/api/watches/${watchId}/merge-languages`);
-  } catch (e) { showToast(errText(e), 'danger'); return; }
-  showToast('Lingue unite: varranno dai prossimi episodi', 'success');
-  loadWatches();
+    tracks = await api.get(`/api/watches/${watchId}/tracks`);
+  } catch (e) {
+    if (_langWatchId !== watchId) return;
+    audioBox.innerHTML = `<div class="alert alert-danger mb-0">${escapeHtml(errText(e, 'Tracce non leggibili dalla fonte'))}</div>`;
+    return;
+  }
+  if (_langWatchId !== watchId) return;
+
+  const boxes = (available, current, cls) => {
+    const codes = [...new Set([...available, ...current])];
+    if (!codes.length) return '<span class="text-muted">Nessuna traccia disponibile.</span>';
+    return codes.map(c => {
+      const gone = !available.includes(c);
+      return `<label class="me-2 mb-1" style="cursor:pointer"
+                     ${gone ? 'title="Non presente nell\'ultimo episodio pubblicato"' : ''}>
+        <input type="checkbox" class="${cls} me-1" value="${escapeHtml(c)}" ${current.includes(c) ? 'checked' : ''}>
+        <span class="badge ${gone ? 'bg-red-lt' : 'bg-blue-lt'}">${escapeHtml(langName(c))}${gone ? ' · non disponibile' : ''}</span></label>`;
+    }).join('');
+  };
+  audioBox.innerHTML = boxes(tracks.audio, w.audio_languages, 'watch-lang-audio-check');
+  subsBox.innerHTML = boxes(tracks.subtitles, w.subtitle_languages, 'watch-lang-subs-check');
+  saveBtn.disabled = false;
 }
 
 async function saveWatchLanguages() {
@@ -200,6 +220,14 @@ async function saveWatchLanguages() {
   } catch (e) { showToast(errText(e), 'danger'); return; }
   hideModal('watch-lang-modal');
   showToast('Lingue aggiornate: varranno dai prossimi episodi', 'success');
+  loadWatches();
+}
+
+async function mergeWatchLanguages(watchId) {
+  try {
+    await api.post(`/api/watches/${watchId}/merge-languages`);
+  } catch (e) { showToast(errText(e), 'danger'); return; }
+  showToast('Lingue unite: varranno dai prossimi episodi', 'success');
   loadWatches();
 }
 
@@ -321,7 +349,7 @@ async function toggleFollowSeries(kind) {
       // taken from the pickers as they stood, or, when the series was already
       // followed, the ones it had.
       const langs = (data.audio_languages || []).map(langName).join(', ') || 'originale';
-      const differs = (data.missing_languages?.by || []).includes(_me?.user?.username);
+      const differs = !!data.languages_differ;
       showToast((can('DOWNLOAD')
         ? 'Serie seguita: i nuovi episodi arriveranno da soli'
         : 'Serie seguita: i nuovi episodi verranno richiesti a un amministratore')
