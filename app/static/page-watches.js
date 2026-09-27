@@ -48,12 +48,10 @@ function renderWatchesStats() {
   ).join('');
 }
 
-// The owner's DOWNLOAD permission is what the poller checks, so a follower
-// without it must not be told the episode will just appear. An ownerless watch
-// (no accounts at all) always downloads: there is no queue to wait in.
+// Computed by the server with the poller's rule: the owner's live DOWNLOAD
+// permission is not something the browser can see for someone else's series.
 function _watchIsAutomatic(w) {
-  return w.created_by === null || w.auto_approve ||
-    (!!_me && w.created_by === _me.user.id && can('DOWNLOAD'));
+  return !!w.automatic;
 }
 
 function renderWatchesList() {
@@ -86,9 +84,10 @@ function renderWatchesList() {
          </button>`
       : '';
     // Arming is the approver's decision, and only worth offering where it would
-    // change something: a series that already downloads by itself has nothing
-    // to approve.
-    const canArm = can('MANAGE_REQUESTS') && w.created_by !== null;
+    // change something: a series that already downloads by itself — its owner
+    // holds DOWNLOAD — has nothing to approve. An armed one keeps its button,
+    // or the flag could never be taken off again.
+    const canArm = can('MANAGE_REQUESTS') && w.created_by !== null && (w.auto_approve || !auto);
     const armButton = !canArm ? '' : w.auto_approve
       ? `<button class="btn btn-sm btn-outline-secondary" data-action="watch:arm" data-id="${w.id}" data-on="0"
                  title="I nuovi episodi torneranno a passare dalla coda di approvazione">

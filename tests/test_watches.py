@@ -697,3 +697,31 @@ def test_an_unreadable_source_is_reported_not_guessed(client, panel):
     panel.dead = True
 
     assert client.get(f"/api/watches/{watch_id}/tracks").status_code == 502
+
+
+# ── Whether a series downloads by itself ──────────────────────────────────────
+
+def test_a_series_is_automatic_when_its_owner_can_download(client, panel):
+    ann = _user("ann", Permission.REQUEST | Permission.DOWNLOAD)
+    _follow(client, _login(client, ann))
+    bob = _user("bob", Permission.REQUEST)
+    _follow(client, _login(client, bob), {**TV_BODY, "external_id": "78"})
+
+    # Seen by an approver, who holds neither series: the browser could not
+    # have worked this out from its own permissions.
+    _login(client, _user("boss", Permission.MANAGE_REQUESTS))
+    listed = {w["external_id"]: w for w in client.get("/api/watches").json()["watches"]}
+
+    assert listed["77"]["automatic"] is True
+    assert listed["78"]["automatic"] is False
+
+
+def test_arming_makes_a_series_automatic(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    watch_id = _follow(client, _login(client, bob)).json()["id"]
+    csrf = _login(client, _user("boss", ALL_PERMISSIONS))
+
+    armed = client.post(f"/api/watches/{watch_id}/auto-approve", json={"enabled": True},
+                        headers={"X-CSRF-Token": csrf}).json()
+
+    assert armed["automatic"] is True
