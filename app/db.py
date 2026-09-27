@@ -458,6 +458,17 @@ def _v8_carry_over_open_mode(conn: sqlite3.Connection, fresh: bool):
     logger.info("Carried an existing AUTH_ENABLED=0 deployment over to auth_mode=open")
 
 
+_V9_FOLLOWER_LANGUAGES = [
+    # What each follower asked for when they followed. The watch keeps one set
+    # of languages for everyone — one file per episode — so a second follower
+    # asking for a track the watch does not download used to be dropped without
+    # a word. Kept per follower so an approver can see who wants what and merge
+    # it in. NULL on rows from before this migration: nobody said.
+    "ALTER TABLE jf_series_watch_subscriber ADD COLUMN audio_languages TEXT",
+    "ALTER TABLE jf_series_watch_subscriber ADD COLUMN subtitle_languages TEXT",
+]
+
+
 Migration = list[str] | Callable[[sqlite3.Connection, bool], None]
 
 MIGRATIONS: list[Migration] = [
@@ -469,6 +480,7 @@ MIGRATIONS: list[Migration] = [
     _V6_PANEL_NOTIFICATIONS,
     _V7_DOWNLOAD_HOOK,
     _v8_carry_over_open_mode,
+    _V9_FOLLOWER_LANGUAGES,
 ]
 
 

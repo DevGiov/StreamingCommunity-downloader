@@ -95,7 +95,12 @@
                       id="dl-refresh-btn" title="Rileggi i download dal server">
                 <i class="ti ti-refresh me-1"></i>Aggiorna
               </button>
-              <button class="btn btn-sm btn-outline-secondary" data-action="jobs:clear">
+              <button class="btn btn-sm btn-outline-primary" data-action="jobs:retryFailed"
+                      id="dl-retry-btn" style="display:none" title="Rimetti in coda tutti i download falliti">
+                <i class="ti ti-reload me-1"></i>Riprova falliti
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" data-action="jobs:clear"
+                      title="Rimuove completati e annullati; i falliti restano finché non li riprovi o li rimuovi">
                 <i class="ti ti-trash me-1"></i>Rimuovi completati
               </button>
             </div>

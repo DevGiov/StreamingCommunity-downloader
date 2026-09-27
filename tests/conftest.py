@@ -51,6 +51,16 @@ def _reset_ratelimit():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_auto_retry(monkeypatch):
+    """A failing job is retried a minute later in production. Tests that fail a
+    job on purpose want the failure, not three more calls and three minutes;
+    tests/test_job_retry.py turns it back on where it is the subject."""
+    from app import jobs
+
+    monkeypatch.setattr(jobs, "AUTO_RETRIES", 0)
+
+
 # ── Fake Jellyfin server ───────────────────────────────────────────────────────
 
 class FakeResponse:

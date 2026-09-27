@@ -249,6 +249,7 @@ const NOTIFICATION_ICONS = {
   download_batch_failed: 'ti-alert-octagon',
   watch_needs_approval: 'ti-bell-question',
   watch_auto_approved: 'ti-bell-check',
+  watch_languages_differ: 'ti-language',
   source_domain_found: 'ti-world-search',
   source_domain_applied: 'ti-world-check',
   hook_failed: 'ti-webhook-off',
@@ -270,6 +271,7 @@ const NOTIFICATION_LABELS = {
   download_batch_failed: 'Stagione o serie fallita',
   watch_needs_approval: 'Serie seguita da approvare',
   watch_auto_approved: 'Serie approvata',
+  watch_languages_differ: 'Lingue diverse su una serie seguita',
   source_domain_found: 'Nuovo dominio trovato',
   source_domain_applied: 'Dominio aggiornato',
   hook_failed: 'Hook fallito',
@@ -290,7 +292,7 @@ const NOTIFICATION_EVENT_GROUPS = [
   },
   {
     label: 'Serie seguite',
-    events: ['watch_needs_approval', 'watch_auto_approved'],
+    events: ['watch_needs_approval', 'watch_auto_approved', 'watch_languages_differ'],
   },
   {
     label: 'Sorgente',

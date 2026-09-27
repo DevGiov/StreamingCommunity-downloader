@@ -6,7 +6,7 @@ import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.config import VIDEOS_DIR, TMP_DIR, get_settings
@@ -24,6 +24,13 @@ def _get_library_path(type_: str) -> str:
 logger = logging.getLogger(__name__)
 
 SCHEDULER_INTERVAL = 30  # seconds
+
+# A failed download is run again this many times, this long after each failure,
+# before it is shown as failed. The source refuses a request now and then and
+# serves the same one a minute later; a configuration mistake just fails fast
+# three more times, which costs nothing.
+AUTO_RETRIES = 3
+AUTO_RETRY_DELAY = 60  # seconds
 
 
 @dataclass
@@ -61,6 +68,29 @@ class DownloadJob:
     year: Optional[str] = None
     season: Optional[int] = None
     episode_number: Optional[str] = None
+
+    # What was handed to the executor, minus the arguments bound to this job
+    # object (_JOB_BOUND_KWARGS). Kept so a failed job can be run again without
+    # the client re-sending anything — the domain and the requester's identity
+    # must not come from a request body.
+    call: Optional[tuple] = field(default=None, repr=False)
+
+    # Automatic retries used so far, and when the next one starts (None when
+    # none is pending). The job keeps its id and stays non-terminal throughout:
+    # listeners hear about it once, when it is finally done or failed.
+    retries: int = 0
+    retry_at: Optional[datetime] = None
+
+
+# Rebuilt for every attempt: each belongs to one job id.
+_JOB_BOUND_KWARGS = ("temp_dir", "progress_factory", "cancel_event")
+
+
+def _worth_retrying(exc: Exception) -> bool:
+    """Everything but a missing audio track, which no retry can fix: it waits
+    for a person to choose, and on the request path parks the request."""
+    from app.core._shared import MissingAudioTrackError
+    return not isinstance(exc, MissingAudioTrackError)
 
 
 class JobManager:
@@ -132,6 +162,9 @@ class JobManager:
             "season": job.season,
             "episode_number": job.episode_number,
             "year": job.year,
+            "retries": job.retries,
+            "max_retries": AUTO_RETRIES,
+            "retry_at": job.retry_at.isoformat() if job.retry_at else None,
         }
 
     # ── Global pub/sub ─────────────────────────────────────────────────────────
@@ -278,6 +311,7 @@ class JobManager:
             if self._schedule_store is not None and job.schedule_id:
                 self._schedule_store.mark_fired(job.schedule_id)
         self._broadcast({"type": "job_status", "job_id": job.job_id, "status": "queued"})
+        self._remember_call(job, fn, args, kwargs)
         self._executor.submit(self._run_download, job, fn, *args, **kwargs)
 
     def _build_call(self, type_: str, params: dict, job: DownloadJob):
@@ -358,47 +392,113 @@ class JobManager:
         self._broadcast({"type": "job_dismissed", "job_id": job_id})
         return True
 
+    def retry(self, job_id: str) -> Optional[str]:
+        """Run a failed job again as a new job; returns the new job id.
+
+        The failed entry goes away in the same step, so a second failure makes a
+        fresh entry instead of a duplicate. The new job leaves the batch it came
+        from: that batch counted this episode already, and closes (or has
+        closed) on its own count — reporting into it again would close it early
+        or land in a batch that no longer exists. A retry succeeding is
+        therefore announced on its own.
+        """
+        with self._lock:
+            old = self._jobs.get(job_id)
+            if not old or old.status != "error" or old.call is None:
+                return None
+            del self._jobs[job_id]
+        if self._schedule_store is not None:
+            self._schedule_store.remove_by_job_id(job_id)
+        self._broadcast({"type": "job_dismissed", "job_id": job_id})
+
+        job = self._make_job(
+            old.title, old.type, phases=list(old.phases),
+            user_id=old.user_id, media_label=old.media_label, year=old.year,
+            season=old.season, episode_number=old.episode_number,
+        )
+        fn, args, kwargs = old.call
+        return self._submit_job(
+            job, fn, *args, **kwargs,
+            temp_dir=str(TMP_DIR / job.job_id),
+            progress_factory=self._make_progress_factory(job),
+            cancel_event=job.cancel_event,
+        )
+
+    @staticmethod
+    def _remember_call(job: DownloadJob, fn, args, kwargs):
+        job.call = (fn, args, {k: v for k, v in kwargs.items() if k not in _JOB_BOUND_KWARGS})
+
     def _run_download(self, job: DownloadJob, fn, *args, **kwargs):
         # Listeners fire outside the semaphore: a listener does DB writes and
         # blocking HTTP (external notification channels), and holding a download
         # slot for that would cost real throughput. The outer try/finally makes
         # every path notify exactly once — including the job cancelled before it
         # ever started, which used to return early and notify nobody, leaving
-        # anything counting completions waiting forever.
+        # anything counting completions waiting forever. An automatic retry is
+        # not a path out: it loops here, so a batch still counts the episode
+        # once, with its final outcome.
         try:
-            with self._semaphore:
-                if job.cancel_event.is_set():
+            while self._attempt(job, fn, args, kwargs):
+                # The wait holds no download slot, and a cancel ends it at once.
+                if job.cancel_event.wait(AUTO_RETRY_DELAY):
+                    job.retry_at = None
                     job.status = "cancelled"
                     self._emit(job, {"type": "error", "message": "Annullato"})
                     return
-
-                job.status = "running"
-                self._broadcast({"type": "job_status", "job_id": job.job_id, "status": "running"})
-
-                try:
-                    result = fn(*args, **kwargs)
-                    job.status = "done"
-                    job.output_path = result
-                    self._emit(job, {"type": "done", "output_path": result})
-                except DownloadCancelledError:
-                    job.status = "cancelled"
-                    self._emit(job, {"type": "error", "message": "Annullato"})
-                except Exception as e:
-                    logger.exception(f"Job {job.job_id} failed: {e}")
-                    job.status = "error"
-                    job.error = str(e)
-                    self._emit(job, {"type": "error", "message": str(e)})
-                finally:
-                    tmp_path = TMP_DIR / job.job_id
-                    if tmp_path.exists():
-                        shutil.rmtree(tmp_path, ignore_errors=True)
-                        logger.info("Cleaned up temp dir: %s", tmp_path)
+                job.retry_at = None
+                if "progress_factory" in kwargs:
+                    # The factory carries byte totals from phase to phase; the
+                    # failed attempt's must not count toward the new one.
+                    kwargs = {**kwargs, "progress_factory": self._make_progress_factory(job)}
         finally:
             self._notify_listeners(job)
+
+    def _attempt(self, job: DownloadJob, fn, args, kwargs) -> bool:
+        """Run the download once. True when it failed and should run again."""
+        with self._semaphore:
+            if job.cancel_event.is_set():
+                job.status = "cancelled"
+                self._emit(job, {"type": "error", "message": "Annullato"})
+                return False
+
+            job.status = "running"
+            self._broadcast({"type": "job_status", "job_id": job.job_id, "status": "running"})
+
+            try:
+                result = fn(*args, **kwargs)
+                job.status = "done"
+                job.output_path = result
+                self._emit(job, {"type": "done", "output_path": result})
+            except DownloadCancelledError:
+                job.status = "cancelled"
+                self._emit(job, {"type": "error", "message": "Annullato"})
+            except Exception as e:
+                if job.retries < AUTO_RETRIES and _worth_retrying(e):
+                    job.retries += 1
+                    logger.warning("Job %s failed (%s); retry %d/%d in %ds",
+                                   job.job_id, e, job.retries, AUTO_RETRIES, AUTO_RETRY_DELAY)
+                    job.status = "queued"
+                    job.error = str(e)
+                    job.retry_at = datetime.now(timezone.utc) + timedelta(seconds=AUTO_RETRY_DELAY)
+                    job.progress = {**job.progress, "current": 0, "pct": 0, "speed": 0,
+                                    "eta": None, "bytes_done": 0}
+                    self._broadcast({"type": "job_retrying", "job": self._job_to_dict(job)})
+                    return True
+                logger.exception(f"Job {job.job_id} failed: {e}")
+                job.status = "error"
+                job.error = str(e)
+                self._emit(job, {"type": "error", "message": str(e)})
+            finally:
+                tmp_path = TMP_DIR / job.job_id
+                if tmp_path.exists():
+                    shutil.rmtree(tmp_path, ignore_errors=True)
+                    logger.info("Cleaned up temp dir: %s", tmp_path)
+        return False
 
     def _submit_job(self, job: DownloadJob, fn, *args, **kwargs) -> str:
         with self._lock:
             self._jobs[job.job_id] = job
+        self._remember_call(job, fn, args, kwargs)
         self._broadcast({"type": "job_created", "job": self._job_to_dict(job)})
         self._executor.submit(self._run_download, job, fn, *args, **kwargs)
         return job.job_id
