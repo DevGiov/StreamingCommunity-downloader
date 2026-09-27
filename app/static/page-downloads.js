@@ -29,9 +29,18 @@ function connectGlobalStream() {
         addJobCard(msg.job);
         updateActiveBadge();
         break;
+      case 'job_retrying':
+        // Same job, failed once more and waiting for its next try: the card
+        // stays in "in corso" and says when that is and why.
+        _jobs.set(msg.job.job_id, msg.job);
+        delete _jobPhases[msg.job.job_id];
+        renderAllJobCards();
+        updateActiveBadge();
+        break;
       case 'job_status':
         if (_jobs.has(msg.job_id)) {
           _jobs.get(msg.job_id).status = msg.status;
+          if (msg.status === 'running') _jobs.get(msg.job_id).retry_at = null;
           refreshCardAppearance(msg.job_id);
           updateActiveBadge();
         }
@@ -218,6 +227,23 @@ function _stopBtnHtml(jobId) {
                   data-job="${jobId}" title="Interrompi"><i class="ti ti-player-stop"></i></button>`;
 }
 
+// A failed job stays until someone decides about it: run it again, or let it go.
+// "Rimuovi completati" deliberately leaves it alone — it is the only record of
+// what still has to be downloaded.
+function _retryText(j) {
+  const at = new Date(j.retry_at).toLocaleTimeString('it-IT', {hour:'2-digit', minute:'2-digit'});
+  return `Nuovo tentativo ${j.retries}/${j.max_retries} alle ${at} · ${j.error || 'errore'}`;
+}
+
+function _failedBtnsHtml(jobId) {
+  const retry = can('DOWNLOAD')
+    ? `<button class="btn btn-sm btn-outline-primary ms-1" data-action="jobs:retry"
+               data-job="${jobId}" title="Riprova"><i class="ti ti-reload"></i></button>`
+    : '';
+  return retry + `<button class="btn btn-sm btn-outline-secondary ms-1" data-action="jobs:dismiss"
+                  data-job="${jobId}" title="Rimuovi dall'elenco"><i class="ti ti-x"></i></button>`;
+}
+
 function _buildJobCard(j) {
   const phase = _jobPhases[j.job_id] || j.status;
   const isActive = j.status==='running' || j.status==='queued' || j.status==='scheduled';
@@ -232,13 +258,14 @@ function _buildJobCard(j) {
   const borderColor = _phaseBorder(phase);
 
 
-  const infoStr = _jobInfoText(j.progress, j.status);
+  const infoStr = j.retry_at ? _retryText(j) : _jobInfoText(j.progress, j.status);
   const infoTitle = (j.progress?.bytes_total && j.status !== 'done')
     ? ' title="La playlist non dichiara una dimensione: il totale è stimato sui segmenti già scaricati."'
     : '';
 
   const fireBtn = j.status === 'scheduled' ? _fireBtnHtml(j.job_id) : '';
-  const stopBtn = isActive ? _stopBtnHtml(j.job_id) : '';
+  const stopBtn = isActive ? _stopBtnHtml(j.job_id)
+    : (j.status === 'error' ? _failedBtnsHtml(j.job_id) : '');
 
   const rawTs = j.scheduled_at || j.created_at;
   const dateStr = rawTs
@@ -317,6 +344,8 @@ function renderDlStats() {
     `<span class="pg-stat ${counts[key] ? cls : 'pg-stat-zero'}">
        <b>${counts[key]}</b><span>${label}</span>
      </span>`).join('');
+  const retryAll = document.getElementById('dl-retry-btn');
+  if (retryAll) retryAll.style.display = counts.error && can('DOWNLOAD') ? '' : 'none';
 }
 
 // One group heading for a batch, with what the batch is doing as a whole —
@@ -447,7 +476,8 @@ function refreshCardAppearance(jobId) {
   if (fire) fire.innerHTML = j.status === 'scheduled' ? _fireBtnHtml(jobId) : '';
   const stop = document.getElementById(`job-stop-${jobId}`);
   if (stop) {
-    stop.innerHTML = isActive && j.status !== 'scheduled' ? _stopBtnHtml(jobId) : '';
+    stop.innerHTML = isActive && j.status !== 'scheduled' ? _stopBtnHtml(jobId)
+      : (j.status === 'error' ? _failedBtnsHtml(jobId) : '');
   }
 
   // Update info text
@@ -603,9 +633,32 @@ async function refreshJobs() {
   }
 }
 
+async function retryJob(jobId) {
+  // The server replaces the failed entry with a new job; job_dismissed and
+  // job_created on the stream move the card.
+  try {
+    await api.post(`/api/download/${jobId}/retry`);
+  } catch(e) { showToast(errText(e), 'danger'); }
+}
+
+async function retryFailed() {
+  const failed = [..._jobs.values()].filter(j => j.status === 'error').map(j => j.job_id);
+  const results = await Promise.allSettled(failed.map(id => api.post(`/api/download/${id}/retry`)));
+  const refused = results.filter(r => r.status === 'rejected').length;
+  if (refused) showToast(`${refused} download non sono stati rimessi in coda`, 'warning');
+}
+
+async function dismissJob(jobId) {
+  try {
+    await api.del(`/api/download/${jobId}`);
+  } catch(e) { showToast(errText(e), 'danger'); }
+}
+
+// Failed jobs are not "finished" here: clearing them used to throw away the
+// only list of what still had to be downloaded.
 async function clearFinished() {
   const finished = [..._jobs.entries()]
-    .filter(([,j]) => j.status==='done'||j.status==='error'||j.status==='cancelled')
+    .filter(([,j]) => j.status==='done'||j.status==='cancelled')
     .map(([id]) => id);
   // allSettled, so one refusal does not abandon the rest: every job that
   // can go, goes.
@@ -627,6 +680,9 @@ registerActions({
   'jobs:filter':      d => setDlFilter(d.filter),
   'jobs:fire':        d => fireNow(d.job),
   'jobs:cancel':      d => cancelJob(d.job),
+  'jobs:retry':       d => retryJob(d.job),
+  'jobs:retryFailed': () => retryFailed(),
+  'jobs:dismiss':     d => dismissJob(d.job),
   'jobs:toggleGroup': d => toggleJobGroup(d.batch),
 });
 
