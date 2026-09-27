@@ -71,7 +71,19 @@ def _public(watch: models.Watch, http_request: HttpRequest) -> dict:
         body["followers"] = []
         body["created_by_username"] = None
         missing = {**missing, "by": []}
-    return {**body, "missing_languages": missing}
+    return {**body, "missing_languages": missing, "automatic": _is_automatic(watch)}
+
+
+def _is_automatic(watch: models.Watch) -> bool:
+    """Whether a new episode downloads without anyone approving it.
+
+    Decided here, with the poller's own rule, because the browser only knows
+    the viewer's permissions: an approver looking at someone else's series
+    could not tell that its owner holds DOWNLOAD, and was shown "passa dalla
+    coda" and an arming button that would change nothing. An ownerless watch
+    (no accounts) always downloads — the poller submits it directly.
+    """
+    return watch.created_by is None or poller.may_auto_download(watch)
 
 
 def _sees_names(http_request: HttpRequest) -> bool:
