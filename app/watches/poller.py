@@ -72,6 +72,41 @@ def current_episodes(watch: models.Watch) -> list[tuple[str, dict]]:
     return found
 
 
+def available_tracks(watch: models.Watch) -> dict:
+    """Audio and subtitle languages on the latest published episode.
+
+    The latest rather than the first, which is what the title page samples:
+    a watch is about the episodes still to come, and tracks change over a
+    series' life — a dub arriving from season 3 on, subtitles dropped later.
+    """
+    if watch.media_type == models.ANIME:
+        from app.core import animeunity
+
+        episodes = animeunity.get_episodes(watch.external_id)
+        if not episodes:
+            raise RuntimeError("nessun episodio letto dalla fonte")
+        langs = animeunity.get_episode_languages(episodes[-1]["id"])
+    else:
+        from app.core.page import get_domain_version
+        from app.core.tv import get_episode_languages, get_info_season, get_info_tv, get_token
+
+        tv_id = int(watch.external_id)
+        domain = resolver.current_domain()
+        version = get_domain_version(domain) or ""
+        token = get_token(tv_id, domain)
+        seasons = get_info_tv(tv_id, watch.slug or "", version, domain) or 0
+        episodes = get_info_season(tv_id, watch.slug or "", domain, version, token, seasons) \
+            if seasons else []
+        if not episodes:
+            raise RuntimeError("nessun episodio letto dalla fonte")
+        langs = get_episode_languages(tv_id, episodes[-1]["id"], domain, token)
+    # The playlist lists a language once per rendition; the choice is per language.
+    return {
+        "audio": list(dict.fromkeys(langs.get("audio") or [])),
+        "subtitles": list(dict.fromkeys(langs.get("subtitles") or [])),
+    }
+
+
 # ── Decision ───────────────────────────────────────────────────────────────────
 
 def _draft_request(watch: models.Watch, season, episode_number) -> request_models.Request:

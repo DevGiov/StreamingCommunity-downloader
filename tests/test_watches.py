@@ -88,7 +88,9 @@ def test_a_second_follower_joins_the_same_watch(client, panel):
     second = _follow(client, _login(client, ann)).json()
 
     assert second["id"] == first["id"]
-    assert sorted(second["followers"]) == ["ann", "bob"]
+    assert sorted(watch_models.follower_names(first["id"])) == ["ann", "bob"]
+    # Who else follows it is not ann's to see.
+    assert second["followers"] == []
 
 
 def test_the_owner_can_change_the_languages(client, panel):
@@ -565,7 +567,9 @@ def test_joining_with_extra_languages_tells_the_approvers(client, panel):
 
     assert any("ann segue «Test Series» chiedendo anche audio ENG e sottotitoli ENG" in m
                for m in _bell(boss)), _bell(boss)
-    assert body["missing_languages"] == {"audio": ["eng"], "subtitles": ["eng"], "by": ["ann"]}
+    # ann is told it is about her; the names stay with the approvers.
+    assert body["languages_differ"] is True
+    assert body["missing_languages"] == {"audio": ["eng"], "subtitles": ["eng"], "by": []}
     # Nothing is changed on ann's behalf: that is the approver's call.
     assert watch_models.get(body["id"]).audio_languages == ["ita"]
 
@@ -614,3 +618,82 @@ def test_a_follower_cannot_merge(client, panel):
                            headers={"X-CSRF-Token": csrf})
 
     assert response.status_code == 403
+
+
+def test_the_owner_sees_the_gap_but_not_who_asked(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    _follow(client, _login(client, bob))
+    ann = _user("ann", Permission.REQUEST)
+    _follow(client, _login(client, ann), {**TV_BODY, "audio_languages": ["eng"]})
+
+    _login(client, bob)
+    listed = client.get("/api/watches/mine").json()["watches"][0]
+
+    assert listed["missing_languages"] == {"audio": ["eng"], "subtitles": [], "by": []}
+    assert listed["followers"] == []
+
+
+def test_an_approver_sees_who_follows_and_who_asked(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    _follow(client, _login(client, bob))
+    ann = _user("ann", Permission.REQUEST)
+    _follow(client, _login(client, ann), {**TV_BODY, "audio_languages": ["eng"]})
+
+    _login(client, _user("boss", ALL_PERMISSIONS))
+    listed = client.get("/api/watches").json()["watches"][0]
+
+    assert sorted(listed["followers"]) == ["ann", "bob"]
+    assert listed["missing_languages"]["by"] == ["ann"]
+
+
+def test_download_alone_does_not_list_everyones_watches(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    _follow(client, _login(client, bob))
+
+    _login(client, _user("dan", Permission.DOWNLOAD))
+
+    assert client.get("/api/watches").status_code == 403
+    assert client.get("/api/watches/mine").json()["watches"] == []
+
+
+def test_the_tracks_offered_are_the_latest_episode_s(client, panel, monkeypatch):
+    from app.core import tv
+
+    asked = []
+
+    def languages(tv_id, ep_id, *a, **k):
+        asked.append(ep_id)
+        return {"audio": ["ita", "ita", "jpn"], "subtitles": ["forced-ita", "eng"]}
+
+    monkeypatch.setattr(tv, "get_episode_languages", languages)
+    bob = _user("bob", Permission.REQUEST)
+    csrf = _login(client, bob)
+    watch_id = _follow(client, csrf).json()["id"]
+
+    response = client.get(f"/api/watches/{watch_id}/tracks")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"audio": ["ita", "jpn"], "subtitles": ["forced-ita", "eng"]}
+    assert asked == [903]   # episode 3, the latest published
+    # A forced-subtitle code the source offers can be chosen.
+    saved = client.put(f"/api/watches/{watch_id}/languages",
+                       json={"audio_languages": ["jpn"], "subtitle_languages": ["forced-ita"]},
+                       headers={"X-CSRF-Token": csrf})
+    assert saved.status_code == 200, saved.text
+
+
+def test_a_follower_cannot_read_the_tracks_dialog(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    watch_id = _follow(client, _login(client, bob)).json()["id"]
+    ann = _user("ann", Permission.REQUEST)
+    _follow(client, _login(client, ann))
+
+    assert client.get(f"/api/watches/{watch_id}/tracks").status_code == 403
+
+
+def test_an_unreadable_source_is_reported_not_guessed(client, panel):
+    bob = _user("bob", Permission.REQUEST)
+    watch_id = _follow(client, _login(client, bob)).json()["id"]
+    panel.dead = True
+
+    assert client.get(f"/api/watches/{watch_id}/tracks").status_code == 502

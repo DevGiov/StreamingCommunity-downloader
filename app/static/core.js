@@ -347,7 +347,9 @@ const LANG_NAMES = {
   deu:'Deutsch', por:'Português', jpn:'日本語', zho:'中文',
   ara:'العربية', rus:'Русский', kor:'한국어',
 };
-const langName = c => LANG_NAMES[c] || c;
+const langName = c => c.startsWith('forced-')
+  ? `${langName(c.slice(7))} (forzati)`
+  : LANG_NAMES[c] || c;
 
 
 // formatSize() stops at GB and is used for file rows; volumes are routinely in
