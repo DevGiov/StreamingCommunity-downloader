@@ -183,6 +183,15 @@ anything under a mounted static directory is readable by unauthenticated visitor
   never fires. That is why `jobs.py` notifies listeners on *every* path out of `_run_download`,
   including the job cancelled before it started, and why `cancel()` notifies for a job still
   `scheduled` that the executor never saw.
+- **An automatic retry is not a way out of a job.** `_run_download` loops on `_attempt()` up to
+  `AUTO_RETRIES` times, `AUTO_RETRY_DELAY` apart, outside the semaphore; the job keeps its id and
+  stays `queued` meanwhile, so listeners still fire once, with the final outcome. A manual retry
+  (`JobManager.retry()`) is the opposite: a *new* job, out of its batch, because the batch already
+  counted the old one. Tests run with `AUTO_RETRIES = 0` (autouse fixture in `tests/conftest.py`).
+- **A watch has one set of languages; followers each keep what they asked for.** The per-follower
+  columns on `jf_series_watch_subscriber` exist only to report the gap
+  (`models.missing_languages()`) and to merge it on an approver's decision — never to change the
+  watch on a follower's behalf, since every added track grows every future episode for everyone.
 - **External channels have no in-app recipient to wait for.** `AppriseChannel` fires with an empty
   user list on purpose: a direct download in open mode has no account, but the webhook is still the
   point. `InAppChannel` keeps the guard — with no recipients there is nothing to insert.

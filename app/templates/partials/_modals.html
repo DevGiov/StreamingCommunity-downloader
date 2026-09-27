@@ -21,6 +21,33 @@
 </div>
 
 <!-- ── Fix Request Modal ────────────────────────────────────────────── -->
+<div class="modal modal-blur fade" id="watch-lang-modal" tabindex="-1" style="display:none" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="ti ti-language me-2"></i>Lingue dei prossimi episodi</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="mb-3" id="watch-lang-title" style="font-weight:600"></p>
+        <label class="form-label">Audio</label>
+        <div id="watch-lang-audio" class="mb-3"></div>
+        <label class="form-label">Sottotitoli</label>
+        <div id="watch-lang-subs"></div>
+        <p class="text-muted mt-3 mb-0" style="font-size:11px">
+          Tracce lette dall'ultimo episodio pubblicato. Vale per gli episodi che
+          usciranno da ora in poi. Se la fonte non offre una
+          traccia audio scelta, l'episodio viene fermato invece di essere scaricato senza.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Annulla</button>
+        <button class="btn btn-primary" id="watch-lang-save" data-action="watch:saveLanguages">Salva</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal modal-blur fade" id="fix-modal" tabindex="-1" style="display:none" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
