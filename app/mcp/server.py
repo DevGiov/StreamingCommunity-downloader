@@ -11,6 +11,9 @@ import threading
 from typing import Optional
 import uvicorn
 
+from mcp.server.mcpserver import MCPServer
+from mcp.server.sse import TransportSecuritySettings
+
 from app.auth.models import get_setting, set_setting
 from app.config import get_settings
 from app.mcp.auth import MCPAuthMiddleware, SETTING_MCP_TOKEN
@@ -78,7 +81,9 @@ class MCPServerManager:
             self._port = target_port
 
             # Build Starlette app with authentication
-            app = mcp_server.sse_app()
+            app = mcp_server.sse_app(
+                transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False)
+            )
             app.add_middleware(MCPAuthMiddleware)
 
             config = uvicorn.Config(
