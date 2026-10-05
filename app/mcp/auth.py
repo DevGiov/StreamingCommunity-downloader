@@ -2,13 +2,14 @@
 
 Supports Bearer token authentication via the Authorization header or
 a ?token= query parameter (useful for SSE clients that cannot set headers).
+Uses pure ASGI to avoid buffering or interfering with Server-Sent Events streams.
 """
 
 import hmac
 import logging
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from urllib.parse import parse_qs
+
+from starlette.responses import JSONResponse
 
 from app.auth.models import get_setting
 
@@ -31,35 +32,48 @@ def verify_token(provided_token: str) -> bool:
     return hmac.compare_digest(configured.encode("utf-8"), provided_token.strip().encode("utf-8"))
 
 
-class MCPAuthMiddleware(BaseHTTPMiddleware):
-    """Protects the MCP server endpoints."""
+class MCPAuthMiddleware:
+    """Pure ASGI middleware protecting the MCP server endpoints."""
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         configured = get_configured_token()
-        # If no token is set in the database, allow open access
         if not configured:
-            return await call_next(request)
+            await self.app(scope, receive, send)
+            return
 
-        # Allow OPTIONS for CORS preflight if any
-        if request.method == "OPTIONS":
-            return await call_next(request)
+        method = scope.get("method", "GET")
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
 
         # 1. Check Authorization header: Bearer <token>
-        auth_header = request.headers.get("authorization", "")
+        headers = dict(scope.get("headers", []))
+        auth_header = headers.get(b"authorization", b"").decode("latin-1")
         token = ""
         if auth_header.lower().startswith("bearer "):
             token = auth_header[7:].strip()
 
         # 2. Check query parameter: ?token=<token>
         if not token:
-            token = request.query_params.get("token", "").strip()
+            qs = parse_qs(scope.get("query_string", b"").decode("latin-1"))
+            token = qs.get("token", [""])[0].strip()
 
         if not token or not verify_token(token):
-            logger.warning("Rejected unauthorized MCP request to %s", request.url.path)
-            return JSONResponse(
+            path = scope.get("path", "")
+            logger.warning("Rejected unauthorized MCP request to %s", path)
+            response = JSONResponse(
                 {"error": "Unauthorized", "detail": "Valid MCP Bearer token required"},
                 status_code=401,
                 headers={"WWW-Authenticate": "Bearer"},
             )
+            await response(scope, receive, send)
+            return
 
-        return await call_next(request)
+        await self.app(scope, receive, send)
