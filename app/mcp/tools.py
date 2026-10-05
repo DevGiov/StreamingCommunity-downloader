@@ -347,7 +347,8 @@ async def download_episode(
             # Find matching episode index
             target_idx = None
             for idx, ep in enumerate(episodes):
-                if str(ep.get("number")) == str(episode_number):
+                ep_num = ep.get("n") if ep.get("n") is not None else ep.get("number")
+                if str(ep_num) == str(episode_number):
                     target_idx = idx
                     break
 
