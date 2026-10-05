@@ -133,58 +133,44 @@ def test_mcp_auth_middleware(client):
     """Verify MCPAuthMiddleware enforces Bearer authentication."""
     async def _test():
         set_setting(SETTING_MCP_TOKEN, "secret-test-token")
-        middleware = MCPAuthMiddleware(app=None)
 
-        async def dummy_call_next(request: Request):
-            return Response("ok", status_code=200)
+        async def dummy_app(scope, receive, send):
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+        middleware = MCPAuthMiddleware(dummy_app)
+
+        async def run_req(headers=None, query_string=b""):
+            status_code = None
+            async def send(message):
+                nonlocal status_code
+                if message["type"] == "http.response.start":
+                    status_code = message["status"]
+
+            async def receive():
+                return {"type": "http.request"}
+
+            scope = {
+                "type": "http",
+                "method": "GET",
+                "path": "/sse",
+                "headers": headers or [],
+                "query_string": query_string,
+            }
+            await middleware(scope, receive, send)
+            return status_code
 
         # 1. Missing token -> 401
-        scope_no_auth = {
-            "type": "http",
-            "method": "GET",
-            "path": "/sse",
-            "headers": [],
-            "query_string": b"",
-        }
-        req_no_auth = Request(scope_no_auth)
-        res_no_auth = await middleware.dispatch(req_no_auth, dummy_call_next)
-        assert res_no_auth.status_code == 401
+        assert await run_req() == 401
 
         # 2. Invalid token -> 401
-        scope_bad_auth = {
-            "type": "http",
-            "method": "GET",
-            "path": "/sse",
-            "headers": [(b"authorization", b"Bearer wrong-token")],
-            "query_string": b"",
-        }
-        req_bad_auth = Request(scope_bad_auth)
-        res_bad_auth = await middleware.dispatch(req_bad_auth, dummy_call_next)
-        assert res_bad_auth.status_code == 401
+        assert await run_req(headers=[(b"authorization", b"Bearer wrong-token")]) == 401
 
         # 3. Valid Bearer token -> 200
-        scope_good_auth = {
-            "type": "http",
-            "method": "GET",
-            "path": "/sse",
-            "headers": [(b"authorization", b"Bearer secret-test-token")],
-            "query_string": b"",
-        }
-        req_good_auth = Request(scope_good_auth)
-        res_good_auth = await middleware.dispatch(req_good_auth, dummy_call_next)
-        assert res_good_auth.status_code == 200
+        assert await run_req(headers=[(b"authorization", b"Bearer secret-test-token")]) == 200
 
         # 4. Valid query param token (?token=...) -> 200
-        scope_param_auth = {
-            "type": "http",
-            "method": "GET",
-            "path": "/sse",
-            "headers": [],
-            "query_string": b"token=secret-test-token",
-        }
-        req_param_auth = Request(scope_param_auth)
-        res_param_auth = await middleware.dispatch(req_param_auth, dummy_call_next)
-        assert res_param_auth.status_code == 200
+        assert await run_req(query_string=b"token=secret-test-token") == 200
 
     asyncio.run(_test())
 
