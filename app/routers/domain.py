@@ -250,7 +250,7 @@ _SETTING_RANGES = (
 
 
 @router.put("/settings", dependencies=CAN_MANAGE)
-def set_app_settings(body: SettingsUpdate):
+async def set_app_settings(body: SettingsUpdate):
     # save_settings() replaces the whole `settings` dict rather than merging, so
     # every key the caller did not send has to be carried over here or it is
     # lost. Merging over get_settings() makes that structural: a key added to
@@ -271,7 +271,7 @@ def set_app_settings(body: SettingsUpdate):
     job_manager.update_max_concurrent(new_settings["max_concurrent_downloads"])
     if "mcp_enabled" in provided or "mcp_port" in provided or "mcp_host" in provided:
         from app.mcp.server import mcp_manager
-        asyncio.create_task(mcp_manager.apply_settings(new_settings))
+        await mcp_manager.apply_settings(new_settings)
     return new_settings
 
 

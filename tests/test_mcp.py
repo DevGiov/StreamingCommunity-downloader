@@ -230,3 +230,35 @@ def test_mcp_server_manager_lifecycle(client):
             await mcp_manager.stop()
 
     asyncio.run(_test())
+
+
+def test_mcp_settings_put_route(client, admin_credentials):
+    """Verify that updating MCP settings via PUT /api/domain/settings works without event loop errors."""
+    do_setup(client, admin_credentials)
+    user = make_user("admin", "admin-id", int(Permission.MANAGE_SETTINGS))
+    _, csrf = user, session_for(client, user.id)
+
+    try:
+        # Enable via PUT
+        res = client.put(
+            "/api/domain/settings",
+            json={"mcp_enabled": True, "mcp_port": 8001},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert res.status_code == 200
+        assert res.json()["mcp_enabled"] is True
+        assert res.json()["mcp_port"] == 8001
+        assert mcp_manager.is_running is True
+
+        # Disable via PUT
+        res_off = client.put(
+            "/api/domain/settings",
+            json={"mcp_enabled": False},
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert res_off.status_code == 200
+        assert res_off.json()["mcp_enabled"] is False
+        assert mcp_manager.is_running is False
+    finally:
+        asyncio.run(mcp_manager.stop())
+
