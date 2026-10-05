@@ -179,6 +179,9 @@ class SettingsUpdate(BaseModel):
     # PUT by the settings page, but missing here — and pydantic ignores unknown
     # fields, so the switch reported "Salvato." and saved nothing.
     jellyfin_refresh_on_download: bool | None = None
+    mcp_enabled: bool | None = None
+    mcp_port: int | None = None
+    mcp_host: str | None = None
 
     @field_validator("naming_templates")
     @classmethod
@@ -242,6 +245,7 @@ _SETTING_RANGES = (
     # than this is hammering somebody else's page for a domain that rotates
     # every few weeks.
     ("domain_check_interval_minutes", 30, 1440),
+    ("mcp_port", 1024, 65535),
 )
 
 
@@ -265,6 +269,9 @@ def set_app_settings(body: SettingsUpdate):
     save_settings(new_settings)
     from app.jobs import job_manager
     job_manager.update_max_concurrent(new_settings["max_concurrent_downloads"])
+    if "mcp_enabled" in provided or "mcp_port" in provided or "mcp_host" in provided:
+        from app.mcp.server import mcp_manager
+        asyncio.create_task(mcp_manager.apply_settings(new_settings))
     return new_settings
 
 

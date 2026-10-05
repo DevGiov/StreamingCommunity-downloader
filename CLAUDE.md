@@ -85,6 +85,11 @@ request before any route runs.
 - `poller.py` — periodic enumeration, diff against what is seen, auto-download decision
 - `router.py` — follow, unfollow, status, manual check
 
+**`app/mcp/`** — Model Context Protocol (MCP) server for AI agents
+- `server.py` — `MCPServerManager` lifecycle, dynamically binds to configurable port via SSE
+- `tools.py` — registered MCP tools (search, details, episodes, downloads, jobs, watches, status)
+- `auth.py` — Bearer token authentication middleware
+
 **`app/`** — `jobs.py` (thread pool, semaphore, SSE broadcast), `downloads_notify.py` (notifications
 for downloads that skipped the queue, one summary per season/series), `downloads_hooks.py`
 (post-download webhooks and the Jellyfin library refresh), `schedule.py`, `db.py`,

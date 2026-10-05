@@ -13,7 +13,7 @@ const _SETTINGS_FEEDBACK_IDS = [
   'jf-connect-feedback', 'jf-reconnect-feedback', 'notif-channels-feedback',
   'domain-recovery-feedback',
   'jf-refresh-feedback', 'hooks-feedback', 'naming-feedback',
-  'output-feedback',
+  'output-feedback', 'mcp-feedback',
 ];
 
 function _feedback(id, message = '', kind = 'muted') {
@@ -39,6 +39,7 @@ const _SETTINGS_TAB_LOADERS = {
   accesso: () => loadJellyfinSettings(),
   notifiche: () => loadNotificationChannels(),
   hook: () => Promise.all([loadJellyfinRefresh(), loadHooks()]),
+  mcp: () => loadMcpSettings(),
 };
 
 // Two panes read the same endpoint. Shared per modal-open so switching between
@@ -54,7 +55,7 @@ function _loadAppSettings() {
 
 // Tabs whose panes only talk to MANAGE_SETTINGS endpoints: without it they would
 // render as empty panes fed by 403s.
-const _SETTINGS_TABS_NEED_MANAGE = ['sorgente', 'librerie', 'nomi', 'download', 'notifiche', 'hook'];
+const _SETTINGS_TABS_NEED_MANAGE = ['sorgente', 'librerie', 'nomi', 'download', 'notifiche', 'hook', 'mcp'];
 
 let _settingsTab = 'sorgente';
 const _settingsLoaded = new Set();
@@ -865,6 +866,125 @@ async function saveLibraries() {
 }
 
 
+// ── MCP Server Settings ───────────────────────────────────────
+
+async function loadMcpSettings() {
+  _feedback('mcp-feedback', '');
+  try {
+    const [appSettings, mcpStatus] = await Promise.all([
+      _loadAppSettings(),
+      api.get('/api/mcp/status').catch(() => null),
+    ]);
+
+    const enabled = appSettings?.mcp_enabled ?? false;
+    const port = appSettings?.mcp_port ?? 8001;
+    const token = mcpStatus?.token || '';
+    const running = mcpStatus?.running ?? false;
+    const sseUrl = mcpStatus?.sse_url || `http://${window.location.hostname || 'localhost'}:${port}/sse`;
+
+    const enabledEl = document.getElementById('setting-mcp-enabled');
+    if (enabledEl) enabledEl.checked = enabled;
+
+    const portEl = document.getElementById('setting-mcp-port');
+    if (portEl) portEl.value = port;
+
+    const tokenEl = document.getElementById('mcp-token-display');
+    if (tokenEl) tokenEl.value = token;
+
+    // Badge
+    const badge = document.getElementById('mcp-status-badge');
+    if (badge) {
+      if (running) {
+        badge.className = 'badge bg-success ms-3';
+        badge.textContent = `Attivo sulla porta ${mcpStatus?.port || port}`;
+      } else {
+        badge.className = 'badge bg-secondary ms-3';
+        badge.textContent = enabled ? 'In avvio o inattivo' : 'Inattivo';
+      }
+    }
+
+    updateMcpSnippet(sseUrl, token);
+  } catch (e) {
+    _feedback('mcp-feedback', errText(e, 'Errore nel caricamento delle impostazioni MCP.'), 'danger');
+  }
+}
+
+function updateMcpSnippet(url, token) {
+  const code = document.getElementById('mcp-config-snippet');
+  if (!code) return;
+  const snippet = {
+    mcpServers: {
+      streamingcommunity: {
+        url: url,
+        headers: {
+          Authorization: `Bearer ${token || '<TOKEN>'}`
+        }
+      }
+    }
+  };
+  code.textContent = JSON.stringify(snippet, null, 2);
+}
+
+async function saveMcpSettings() {
+  const btn = document.getElementById('save-mcp-btn');
+  const enabled = document.getElementById('setting-mcp-enabled').checked;
+  const port = parseInt(document.getElementById('setting-mcp-port').value, 10);
+
+  if (isNaN(port) || port < 1024 || port > 65535) {
+    _feedback('mcp-feedback', 'La porta deve essere un numero compreso tra 1024 e 65535.', 'danger');
+    return;
+  }
+
+  btn.disabled = true;
+  _feedback('mcp-feedback', 'Salvataggio in corso...');
+  try {
+    await api.put('/api/domain/settings', {
+      mcp_enabled: enabled,
+      mcp_port: port,
+    });
+    _appSettingsPromise = null;
+    _feedback('mcp-feedback', 'Impostazioni MCP salvate.', 'success');
+    showToast('Impostazioni MCP salvate', 'success');
+    await loadMcpSettings();
+  } catch (e) {
+    _feedback('mcp-feedback', errText(e, 'Errore durante il salvataggio.'), 'danger');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function copyMcpToken() {
+  const token = document.getElementById('mcp-token-display')?.value;
+  if (!token) return;
+  try {
+    await navigator.clipboard.writeText(token);
+    showToast('Token MCP copiato negli appunti', 'success');
+  } catch (e) {
+    showToast('Impossibile copiare negli appunti', 'warning');
+  }
+}
+
+async function regenerateMcpToken() {
+  const confirmed = await scConfirm(
+    'Rigenerare il token MCP?',
+    'I client o gli agenti attualmente configurati con il vecchio token dovranno essere aggiornati.'
+  );
+  if (!confirmed) return;
+
+  _feedback('mcp-feedback', 'Rigenerazione token...');
+  try {
+    const res = await api.post('/api/mcp/token/regenerate', {});
+    document.getElementById('mcp-token-display').value = res.token;
+    _feedback('mcp-feedback', 'Nuovo token generato con successo.', 'success');
+    showToast('Token MCP rigenerato', 'success');
+    const port = document.getElementById('setting-mcp-port')?.value || '8001';
+    updateMcpSnippet(`http://${window.location.hostname || 'localhost'}:${port}/sse`, res.token);
+  } catch (e) {
+    _feedback('mcp-feedback', errText(e, 'Errore durante la rigenerazione del token.'), 'danger');
+  }
+}
+
+
 // ── Delegated handlers ───────────────────────────────────────────────────────
 
 registerActions({
@@ -895,6 +1015,9 @@ registerActions({
   'cfg:hookEnabled':      (d, el) => toggleHook(Number(d.id), el.checked),
   'cfg:testHook':         d => testHook(Number(d.id)),
   'cfg:deleteHook':       d => deleteHook(Number(d.id)),
+  'cfg:saveMcp':          () => saveMcpSettings(),
+  'cfg:copyMcpToken':     () => copyMcpToken(),
+  'cfg:regenerateMcpToken': () => regenerateMcpToken(),
 });
 
 
