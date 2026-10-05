@@ -61,29 +61,21 @@ async def search_content(
             errors.append("StreamingCommunity: No domain configured")
         else:
             try:
-                def _sc_search():
-                    return page.search_movies_and_series(domain, query, page=page_num)
-
-                sc_data = await asyncio.to_thread(_sc_search)
-                for item in sc_data.get("records", []):
-                    item_type = item.get("type", "film")  # film or tv
-                    # Map filter
-                    if kind == "movie" and item_type != "film":
-                        continue
-                    if kind == "tv" and item_type != "tv":
-                        continue
-                    if kind == "anime":
-                        continue
-
+                media_filter = "movie" if kind == "movie" else "tv" if kind == "tv" else None
+                sc_items = await asyncio.to_thread(
+                    page.search, query, domain, page=page_num, media_type=media_filter
+                )
+                for item in sc_items:
                     results.append({
                         "id": item.get("id"),
                         "slug": item.get("slug"),
-                        "title": item.get("name") or item.get("title"),
-                        "type": "movie" if item_type == "film" else "tv",
-                        "year": item.get("year") or item.get("release_date", "")[:4],
+                        "title": item.get("name"),
+                        "type": item.get("type"),
+                        "year": (item.get("release_date") or item.get("last_air_date") or "")[:4],
                         "source": "streamingcommunity",
                         "poster": item.get("poster"),
                         "score": item.get("score"),
+                        "seasons_count": item.get("seasons_count", 0),
                     })
             except Exception as e:
                 logger.warning("StreamingCommunity search error: %s", e)
@@ -92,20 +84,18 @@ async def search_content(
     # 2. AnimeUnity search
     if source in ("all", "animeunity") and kind in ("all", "anime"):
         try:
-            def _au_search():
-                return animeunity.search_animes(query, page=page_num)
-
-            au_data = await asyncio.to_thread(_au_search)
-            for item in au_data.get("records", []):
+            au_items = await asyncio.to_thread(animeunity.search, query, page=page_num)
+            for item in au_items:
                 results.append({
                     "id": item.get("id"),
                     "slug": item.get("slug"),
-                    "title": item.get("title"),
+                    "title": item.get("name"),
                     "type": "anime",
-                    "year": item.get("year") or (item.get("date") or "")[:4],
+                    "year": (item.get("release_date") or "")[:4],
                     "source": "animeunity",
                     "poster": item.get("poster"),
                     "score": item.get("score"),
+                    "episodes_count": item.get("episodes_count", 0),
                 })
         except Exception as e:
             logger.warning("AnimeUnity search error: %s", e)
@@ -123,7 +113,8 @@ async def search_content(
 @mcp_server.tool()
 async def get_content_details(
     content_id: str,
-    slug: str,
+    slug: str = "",
+    media_type: Literal["movie", "tv", "anime"] = "movie",
     source: Literal["streamingcommunity", "animeunity"] = "streamingcommunity",
 ) -> dict:
     """Get full details and metadata for a title (plot, genres, rating, artwork, trailer, etc.).
@@ -131,27 +122,54 @@ async def get_content_details(
     Args:
         content_id: The ID of the movie/series/anime.
         slug: The title slug (e.g. 'breaking-bad').
+        media_type: 'movie', 'tv', or 'anime'.
         source: 'streamingcommunity' or 'animeunity'.
     """
+    domain = configured_domain()
     try:
-        def _fetch_meta():
-            return metadata.get_metadata(source, content_id, slug)
-
-        meta = await asyncio.to_thread(_fetch_meta)
-        return {
-            "id": content_id,
-            "slug": slug,
-            "source": source,
-            "title": meta.get("name") or meta.get("title"),
-            "plot": meta.get("plot"),
-            "genres": meta.get("genres", []),
-            "score": meta.get("score"),
-            "year": meta.get("year"),
-            "trailer": meta.get("trailer"),
-            "poster": meta.get("poster"),
-            "backdrop": meta.get("backdrop"),
-            "tmdb_id": meta.get("tmdb_id"),
-        }
+        if source == "streamingcommunity":
+            if not domain:
+                return {"error": "No domain configured", "id": content_id, "slug": slug}
+            version = (await asyncio.to_thread(page.get_domain_version, domain)) or ""
+            meta_type = "movie" if media_type == "movie" else "tv"
+            meta = await asyncio.to_thread(metadata.title_metadata, meta_type, content_id, slug, version)
+            return {
+                "id": content_id,
+                "slug": slug,
+                "source": source,
+                "media_type": meta_type,
+                "title": meta.get("name") or meta.get("title"),
+                "plot": meta.get("plot"),
+                "genres": meta.get("genres", []),
+                "score": meta.get("score"),
+                "year": meta.get("year"),
+                "trailer": meta.get("trailer"),
+                "poster": meta.get("poster"),
+                "backdrop": meta.get("backdrop"),
+                "tmdb_id": meta.get("tmdb_id"),
+            }
+        else:
+            items = await asyncio.to_thread(animeunity.search, slug or content_id)
+            match = next((i for i in items if str(i.get("id")) == str(content_id) or i.get("slug") == slug), None)
+            if not match and items:
+                match = items[0]
+            if match:
+                return {
+                    "id": match.get("id"),
+                    "slug": match.get("slug"),
+                    "source": "animeunity",
+                    "media_type": "anime",
+                    "title": match.get("name"),
+                    "plot": match.get("plot"),
+                    "genres": match.get("genres", []),
+                    "score": match.get("score"),
+                    "year": (match.get("release_date") or "")[:4],
+                    "poster": match.get("poster"),
+                    "backdrop": match.get("backdrop"),
+                    "episodes_count": match.get("episodes_count", 0),
+                    "studio": match.get("studio"),
+                }
+            return {"id": content_id, "slug": slug, "source": "animeunity", "error": "Anime not found"}
     except Exception as e:
         logger.error("Error fetching content details: %s", e)
         return {"error": str(e), "id": content_id, "slug": slug}
@@ -163,7 +181,7 @@ async def get_series_episodes(
     slug: str,
     season_number: int | None = None,
 ) -> dict:
-    """Retrieve seasons and episodes for a TV series on StreamingCommunity, including available audio and subtitle tracks.
+    """Retrieve seasons and episodes for a TV series on StreamingCommunity.
 
     Args:
         tv_id: The StreamingCommunity series ID.
@@ -178,32 +196,18 @@ async def get_series_episodes(
         def _fetch():
             version = page.get_domain_version(domain) or ""
             token = tv.get_token(tv_id, domain)
-            seasons_list = tv.get_seasons(domain, tv_id, slug) or []
-
+            seasons_count = tv.get_info_tv(tv_id, slug, version, domain)
             output_seasons = []
-            for s in seasons_list:
-                s_num = s.get("number")
-                if season_number is not None and s_num != season_number:
+            target_seasons = [season_number] if season_number is not None else list(range(1, seasons_count + 1))
+            for s_num in target_seasons:
+                if s_num < 1 or s_num > seasons_count:
                     continue
-
                 raw_episodes = tv.get_info_season(tv_id, slug, domain, version, token, s_num) or []
-                episodes = []
-                for idx, ep in enumerate(raw_episodes):
-                    episodes.append({
-                        "episode_index": idx,
-                        "episode_id": ep.get("id"),
-                        "number": ep.get("number"),
-                        "name": ep.get("name"),
-                        "plot": ep.get("plot"),
-                    })
-
                 output_seasons.append({
                     "season_number": s_num,
-                    "season_id": s.get("id"),
-                    "episodes_count": len(episodes),
-                    "episodes": episodes,
+                    "episodes_count": len(raw_episodes),
+                    "episodes": raw_episodes,
                 })
-
             return output_seasons
 
         seasons_data = await asyncio.to_thread(_fetch)
@@ -214,30 +218,20 @@ async def get_series_episodes(
 
 
 @mcp_server.tool()
-async def get_anime_episodes(anime_id: int, slug: str) -> dict:
+async def get_anime_episodes(anime_id: int | str, slug: str = "") -> dict:
     """Retrieve all available episodes for an anime from AnimeUnity.
 
     Args:
         anime_id: The AnimeUnity anime ID.
-        slug: Anime slug.
+        slug: Optional anime slug.
     """
     try:
-        def _fetch():
-            return animeunity.get_anime_episodes(anime_id, slug)
-
-        episodes = await asyncio.to_thread(_fetch)
-        clean_episodes = []
-        for ep in episodes:
-            clean_episodes.append({
-                "episode_id": ep.get("id"),
-                "number": ep.get("number"),
-                "created_at": ep.get("created_at"),
-            })
+        episodes = await asyncio.to_thread(animeunity.get_episodes, str(anime_id))
         return {
             "anime_id": anime_id,
             "slug": slug,
-            "episodes_count": len(clean_episodes),
-            "episodes": clean_episodes,
+            "episodes_count": len(episodes),
+            "episodes": episodes,
         }
     except Exception as e:
         logger.error("Error getting anime episodes: %s", e)
@@ -254,11 +248,10 @@ async def get_home_shelves(
         source: 'streamingcommunity' or 'animeunity'.
     """
     domain = configured_domain()
+    if source == "streamingcommunity" and not domain:
+        return {"error": "No source domain configured on panel"}
     try:
-        def _fetch():
-            return home.get_home_shelves(source, domain)
-
-        shelves = await asyncio.to_thread(_fetch)
+        shelves = await asyncio.to_thread(home.shelves, source, domain)
         return {"source": source, "shelves": shelves}
     except Exception as e:
         logger.error("Error fetching home shelves: %s", e)
