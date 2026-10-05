@@ -129,6 +129,7 @@
 - Independent permissions: download directly, request, approve, manage users, manage settings
 - Request queue with approval, preserving the audio and subtitle tracks the requester chose
 - Request status on the search result cards, and an in-app notification bell
+- **Model Context Protocol (MCP) server** for AI agents (Cursor, Claude Desktop, Antigravity, etc.) to search, download, monitor queues, and follow series
 - Docker ready
 
 ---
@@ -461,6 +462,43 @@ itself as you type.
 Changing a rule does not rename what is already there. Existing files keep being recognised, so
 nothing is downloaded twice; they simply keep their old names until you rename them in the file
 manager.
+
+---
+
+## Model Context Protocol (MCP)
+
+The panel includes a built-in **Model Context Protocol (MCP)** server, allowing AI agents (such as Claude Desktop, Cursor, Antigravity, and other MCP clients) to interact with your media library and downloader.
+
+### Features & Exposed Tools
+
+- **Content Discovery**: `search_content`, `get_content_details`, `get_series_episodes`, `get_anime_episodes`, `get_home_shelves`
+- **Download Management**: `download_film`, `download_episode`, `download_season`, `download_anime_episode`
+- **Job Monitoring & Control**: `list_downloads`, `get_download_progress`, `cancel_download`, `retry_download`
+- **Series Watch Management**: `follow_series`, `list_watched_series`, `check_series_updates`, `unfollow_series`
+- **Request Queue Operations**: `submit_request`, `list_requests`, `approve_request`
+- **System Information**: `get_system_status`, `list_libraries`
+
+### Configuration
+
+The MCP server is configured and managed directly from the Web UI under **Impostazioni → Server MCP**:
+1. Toggle the **Server MCP** switch to enable or disable it.
+2. Choose your preferred listening port (default: `8001`).
+3. Click **Genera Nuovo Token** to create a secure 48-character Bearer token.
+4. Copy the ready-to-use configuration JSON for Claude Desktop / Cursor.
+
+Example `mcp_config.json`:
+```json
+{
+  "mcpServers": {
+    "streamingcommunity": {
+      "url": "http://<PANEL_HOST>:8001/sse",
+      "headers": {
+        "Authorization": "Bearer <YOUR_MCP_TOKEN>"
+      }
+    }
+  }
+}
+```
 
 ---
 
