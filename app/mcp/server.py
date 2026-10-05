@@ -1,12 +1,13 @@
 """Lifecycle manager for the MCP server.
 
-Runs the MCP Starlette ASGI app over SSE using uvicorn in an asyncio task,
+Runs the MCP Starlette ASGI app over SSE using uvicorn in a dedicated daemon thread,
 allowing dynamic enabling/disabling and port reconfiguration from the UI.
 """
 
 import asyncio
 import logging
 import secrets
+import threading
 from typing import Optional
 import uvicorn
 
@@ -37,7 +38,8 @@ class MCPServerManager:
 
     def __init__(self):
         self._server: Optional[uvicorn.Server] = None
-        self._task: Optional[asyncio.Task] = None
+        self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._running: bool = False
         self._host: str = "0.0.0.0"
         self._port: int = 8001
@@ -88,24 +90,28 @@ class MCPServerManager:
             )
             self._server = uvicorn.Server(config)
             self._running = True
-            self._task = asyncio.create_task(self._run_server())
+
+            def _run():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self._loop = loop
+                try:
+                    loop.run_until_complete(self._server.serve())
+                except Exception:
+                    logger.exception("MCP server crashed unexpectedly")
+                finally:
+                    self._running = False
+                    loop.close()
+
+            self._thread = threading.Thread(target=_run, name="mcp-server", daemon=True)
+            self._thread.start()
+
             # Wait briefly for uvicorn to bind socket and mark started
-            for _ in range(50):
-                if self._server.started or not self._running:
+            for _ in range(60):
+                if (self._server and self._server.started) or not self._running:
                     break
                 await asyncio.sleep(0.05)
             logger.info("MCP server started on %s:%d", self._host, self._port)
-
-    async def _run_server(self):
-        try:
-            if self._server:
-                await self._server.serve()
-        except asyncio.CancelledError:
-            logger.debug("MCP server task cancelled")
-        except Exception:
-            logger.exception("MCP server crashed unexpectedly")
-        finally:
-            self._running = False
 
     async def stop(self):
         """Stop the running MCP server."""
@@ -115,14 +121,11 @@ class MCPServerManager:
     async def _stop_locked(self):
         if self._server:
             self._server.should_exit = True
-            # Give uvicorn a moment to shut down gracefully
-            if self._task and not self._task.done():
-                try:
-                    await asyncio.wait_for(asyncio.shield(self._task), timeout=2.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    self._task.cancel()
+            if self._thread and self._thread.is_alive():
+                await asyncio.to_thread(self._thread.join, 3.0)
             self._server = None
-            self._task = None
+            self._thread = None
+            self._loop = None
             self._running = False
             logger.info("MCP server stopped")
 
