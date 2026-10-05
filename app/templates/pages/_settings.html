@@ -565,7 +565,12 @@
         </div>
 
         <div class="card bg-body-tertiary border-0 p-3 mt-3">
-          <h6 class="fw-bold mb-2"><i class="ti ti-code me-1"></i>Configurazione per Client MCP (es. Claude Desktop / Cursor)</h6>
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="fw-bold mb-0"><i class="ti ti-code me-1"></i>Configurazione per Client MCP (es. Claude Desktop / Cursor)</h6>
+            <button class="btn btn-outline-secondary btn-sm" type="button" data-action="cfg:copyMcpSnippet" id="mcp-copy-snippet-btn" title="Copia Configurazione">
+              <i class="ti ti-copy me-1"></i>Copia JSON
+            </button>
+          </div>
           <p class="small text-muted mb-2">Aggiungi questo blocco al tuo file di configurazione MCP (es. <code>claude_desktop_config.json</code>):</p>
           <pre class="mb-0 p-2 rounded bg-dark text-light" style="font-size: 11px;"><code id="mcp-config-snippet">{
   "mcpServers": {

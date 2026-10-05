@@ -953,13 +953,72 @@ async function saveMcpSettings() {
   }
 }
 
-async function copyMcpToken() {
-  const token = document.getElementById('mcp-token-display')?.value;
-  if (!token) return;
+async function copyTextToClipboard(text, el) {
+  if (!text) return false;
+  // 1. Try navigator.clipboard if in a secure context (https or localhost)
+  if (navigator.clipboard && window.isSecureContext) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch (_) {}
+  }
+  // 2. Fallback using existing input element if provided
+  if (el && typeof el.select === 'function') {
+    try {
+      el.focus();
+      el.select();
+      if (typeof el.setSelectionRange === 'function') el.setSelectionRange(0, 99999);
+      if (document.execCommand('copy')) return true;
+    } catch (_) {}
+  }
+  // 3. Fallback using temporary textarea (for HTTP/LAN IP access)
   try {
-    await navigator.clipboard.writeText(token);
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '0';
+    ta.style.left = '0';
+    ta.style.width = '2em';
+    ta.style.height = '2em';
+    ta.style.padding = '0';
+    ta.style.border = 'none';
+    ta.style.outline = 'none';
+    ta.style.boxShadow = 'none';
+    ta.style.background = 'transparent';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    if (typeof ta.setSelectionRange === 'function') ta.setSelectionRange(0, 99999);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+async function copyMcpToken() {
+  const el = document.getElementById('mcp-token-display');
+  const token = el?.value;
+  if (!token) return;
+  const ok = await copyTextToClipboard(token, el);
+  if (ok) {
     showToast('Token MCP copiato negli appunti', 'success');
-  } catch (e) {
+  } else {
+    showToast('Impossibile copiare negli appunti', 'warning');
+  }
+}
+
+async function copyMcpSnippet() {
+  const el = document.getElementById('mcp-config-snippet');
+  const text = el?.innerText || el?.textContent;
+  if (!text) return;
+  const ok = await copyTextToClipboard(text);
+  if (ok) {
+    showToast('Configurazione JSON copiata negli appunti', 'success');
+  } else {
     showToast('Impossibile copiare negli appunti', 'warning');
   }
 }
@@ -1017,6 +1076,7 @@ registerActions({
   'cfg:deleteHook':       d => deleteHook(Number(d.id)),
   'cfg:saveMcp':          () => saveMcpSettings(),
   'cfg:copyMcpToken':     () => copyMcpToken(),
+  'cfg:copyMcpSnippet':   () => copyMcpSnippet(),
   'cfg:regenerateMcpToken': () => regenerateMcpToken(),
 });
 
