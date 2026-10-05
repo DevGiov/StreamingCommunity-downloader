@@ -15,7 +15,11 @@ from m3u8 import M3U8 as M3U8_Lib
 from tqdm.rich import tqdm
 from tqdm import TqdmExperimentalWarning
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
+try:
+    from cryptography.hazmat.backends import default_backend
+    _DEFAULT_BACKEND = default_backend()
+except Exception:
+    _DEFAULT_BACKEND = None
 
 from app.config import get_settings
 from app.core import container
@@ -287,7 +291,10 @@ class Decryption:
         self.iv = bytes.fromhex(raw_iv.replace("0x", ""))
 
     def decrypt_ts(self, encrypted_data):
-        cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=default_backend())
+        if _DEFAULT_BACKEND is not None:
+            cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), backend=_DEFAULT_BACKEND)
+        else:
+            cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv))
         decryptor = cipher.decryptor()
         return decryptor.update(encrypted_data) + decryptor.finalize()
 

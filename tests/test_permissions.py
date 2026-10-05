@@ -75,6 +75,8 @@ CASES = [
     ((Permission.MANAGE_USERS,), "GET", "/api/users", None),
     ((Permission.REQUEST,), "POST", "/api/requests/season",
      {"external_id": "1", "title": "x", "slug": "x", "season": 1}),
+    ((Permission.MANAGE_SETTINGS,), "GET", "/api/mcp/status", None),
+    ((Permission.MANAGE_SETTINGS,), "POST", "/api/mcp/token/regenerate", None),
 ]
 
 

@@ -100,6 +100,10 @@ SETTINGS_DEFAULTS = {
     # these — app.config must not import app.core.
     "output_container": "mkv",
     "subtitle_mode": "embed",
+    # Model Context Protocol (MCP) server settings. Exposes tools for AI agents.
+    "mcp_enabled": False,
+    "mcp_port": 8001,
+    "mcp_host": "0.0.0.0",
 }
 
 
