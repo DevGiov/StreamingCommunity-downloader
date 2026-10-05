@@ -715,11 +715,11 @@ async def check_series_updates(watch_id: int | None = None) -> dict:
             watch = watch_models.get(watch_id)
             if not watch:
                 return {"ok": False, "error": f"Watch {watch_id} not found"}
-            await asyncio.to_thread(watch_poller.check_one_watch, watch)
-            return {"ok": True, "message": f"Checked watch {watch.title}"}
+            result = await asyncio.to_thread(watch_poller.poll_watch, watch)
+            return {"ok": True, "message": f"Checked watch {watch.title}", "result": result}
         else:
-            await asyncio.to_thread(watch_poller.check_all_watches)
-            return {"ok": True, "message": "Checked all active watches"}
+            result = await asyncio.to_thread(watch_poller.run_poll_cycle)
+            return {"ok": True, "message": "Checked all active watches", "result": result}
     except Exception as e:
         logger.error("Failed to check series updates: %s", e)
         return {"ok": False, "error": str(e)}
@@ -758,9 +758,15 @@ async def submit_request(
     """
     try:
         def _create():
-            from app.auth.models import OPEN_MODE_USER
+            from app.auth import models as auth_models
+            users = auth_models.list_users()
+            admin = next((u for u in users if u.is_jellyfin_admin), None)
+            user = admin or (users[0] if users else None)
+            if not user:
+                raise ValueError("No user account found. The request queue requires Jellyfin user accounts to be configured.")
+
             req, created = requests_service.create_request(
-                requested_by=1,  # Default system/admin user id
+                requested_by=user.id,
                 source=source,
                 media_type=media_type,
                 external_id=str(external_id),
@@ -806,7 +812,7 @@ def list_requests(
 
     return {
         "count": len(all_requests),
-        "requests": [r.to_dict() for r in all_requests],
+        "requests": [r.to_public() for r in all_requests],
     }
 
 
@@ -819,7 +825,14 @@ async def approve_request(request_id: int) -> dict:
     """
     try:
         def _approve():
-            req = requests_service.approve(request_id, decided_by=1)
+            from app.auth import models as auth_models
+            users = auth_models.list_users()
+            admin = next((u for u in users if u.is_jellyfin_admin), None)
+            user = admin or (users[0] if users else None)
+            if not user:
+                raise ValueError("No user account found to approve requests.")
+
+            req = requests_service.approve(request_id, decided_by=user.id)
             return req
 
         req = await asyncio.to_thread(_approve)
